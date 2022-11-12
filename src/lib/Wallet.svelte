@@ -54,10 +54,6 @@
   </select>
   <button on:click={disconnect_wallet}>Disconnect</button>
 {:else}
-  <!--
-  <button on:click={connect_wallet_myalgo}>Connect Wallet</button>
-  <a href="#wallet-select" tabindex="-1"><button>Connect Wallet</button></a>
-  -->
   <select bind:value={wallet_provider} on:change={select_wallet}>
     <option>Connect Wallet</option>
     <option>AlgoSigner</option>
