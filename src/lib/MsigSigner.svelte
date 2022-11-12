@@ -12,66 +12,196 @@
   let tracking
   let current_round
 
+  let txn_file
+  let txn
+  let txns = []
+  let txn_size = 1
+  let active_app
+  let app_id = 100 //7 //1039 //987 //972 //947 //942 //912 //542
+  let global_states = {}
+  let userState = {}
+  let liveState = {}
+  let txn_sender
+  let txn_first_valid
+  let txn_last_valid
+
+  const MAX_SIGNERS = 8
+  let signers = []
+  let accounts = []
+  let threshold
+  let version = 1
+  let signed
+  let msig_address
+  let submit_enabled
+  let msig_state_changed = false
+  let msig_txns
+
+  $: threshold, calc_msig_addr()
+
+  const abi = {
+    "name": "On-Chain Msig Signer",
+    "networks": {},
+    "methods": [
+      {
+        "name": "deploy",
+        "desc": "Deploy a new On-Chain Msig Application",
+        "args": [
+          { "type": "uint8", "name": "VersionMajor", "desc": "Major version number" },
+          { "type": "uint8", "name": "VersionMinor", "desc": "Minor version number" }
+        ],
+        "returns": { "type": "uint64", "desc": "Application ID" }
+      },
+      {
+        "name": "setSignatures",
+        "desc": "Set signatures for account",
+        "args": [
+          { "type": "byte[][]", "name": "Signatures", "desc": "Array of signatures" }
+        ],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "clearSignatures",
+        "desc": "Clear signatures for account",
+        "args": [],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "addAccount",
+        "desc": "Add account to multisig",
+        "args": [
+          { "type": "uint8", "name": "Index", "desc": "Account position within multisig" },
+          { "type": "account", "name": "Account", "desc": "Account to add" }
+        ],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "removeAccount",
+        "desc": "Remove account from multisig",
+        "args": [
+          { "type": "account", "name": "Account", "desc": "Account to remove" }
+        ],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "addTransaction",
+        "desc": "Add transaction to the app",
+        "args": [
+          { "type": "uint8", "name": "Group Index", "desc": "Transactions position within an atomic group" },
+          { "type": "byte[]", "name": "Transaction", "desc": "Transaction to add" }
+        ],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "removeTransaction",
+        "desc": "Remove transaction from the app",
+        "args": [
+          { "type": "uint8", "name": "Group Index", "desc": "Transactions position within an atomic group" }
+        ],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "destroy",
+        "desc": "Destroy the application",
+        "args": [],
+        "returns": { "type": "void" }
+      },
+      {
+        "name": "update",
+        "desc": "Update the application",
+        "args": [
+          { "type": "uint8", "name": "VersionMajor", "desc": "Major version number" },
+          { "type": "uint8", "name": "VersionMinor", "desc": "Minor version number" }
+        ],
+        "returns": { "type": "void" }
+      }
+    ]
+  }
+  const contract = new algosdk.ABIContract(abi)
+
   async function track_round() {
     if (!tracking) return
     try {
       const status = await $algod.statusAfterBlock(current_round).do()
       current_round = status['last-round']
-      check_for_changes(current_round, app_id)
+      check_for_app_changes(current_round, app_id)
       track_round()
     } catch {
       tracking = false
     }
   }
 
-  async function check_for_changes(rnd, apid) {
+  async function check_for_app_changes(rnd, apid) {
     try {
-    const block = await $algod.block(rnd).do()
-    if (block['block']['txns'] === undefined) return
-    block['block']['txns'].forEach(async (txn) => {
-      if (txn['txn']['type'] !== "appl") return
-      if (txn['txn']['apid'] !== apid) return
-      console.log(txn)
-      // Check for state changes
-      await getAppState(apid)
-      // Check for box update
-      if (txn['txn']['apbx'] !== undefined) {
-        await getTxnBox(apid)
-      }
-    })
+      const block = await $algod.block(rnd).do()
+      if (block['block']['txns'] === undefined) return
+      block['block']['txns'].forEach(async (txn) => {
+        if (txn['txn']['type'] !== "appl") return
+        if (txn['txn']['apid'] !== apid) return
+
+        console.log(txn)
+        // Check for state changes
+        await getAppState(apid)
+
+        // Check for box update
+        console.log("Txns: " + msig_txns)
+        if (txn['txn']['apbx'] !== undefined) {
+          await get_txn_boxes(apid)
+        }
+      })
     } catch {}
   }
 
-  async function update_settings() {
+  async function update_algod_settings() {
     $algod = new algosdk.Algodv2($token, $server, $port)
   }
 
-  async function getTxnBox(apid) {
-    txn = undefined
-    const box = await $algod.getApplicationBoxByName(apid, 'txn').do()
-    const len = box.value.length
-    txn = algosdk.decodeUnsignedTransaction(box.value)
+  async function get_txn_boxes(apid) {
+    const boxes = await $algod.getApplicationBoxes(apid).do()
+    if (boxes['boxes'].length > 0) {
+      boxes['boxes'].forEach(async (bx) => {
+        const box = await $algod.getApplicationBoxByName(apid, box_name).do()
+        liveState['txns'].push(algosdk.decodeUnsignedTransaction(box.value))
+      })
+    } else {
+      liveState['txns'] = []
+    }
+    liveState = liveState
   }
 
+  // userState = Current users changes
+  // liveState = Latest blockchain state
   async function getAppState(apid) {
     const app = await $algod.getApplicationByID(apid).do()
+    console.log(app)
     if (app['params']['global-state'] === undefined) return
-    num_signers = 0
     signers = []
     global_states = {}
+    userState = {}
+    userState['accounts'] = []
+    liveState['accounts'] = []
     app['params']['global-state'].forEach((gs) => {
       const key = Buffer.from(gs['key'], 'base64')
       const val = gs['value']
       const value = val['type'] == 1 ? val['bytes'] : val['uint']
       if (key.length == 32 && algosdk.isValidAddress(algosdk.encodeAddress(key))) {
+        liveState['accounts'][algosdk.encodeAddress(key)] = value
         global_states[algosdk.encodeAddress(key)] = value
         signers.push({addr: algosdk.encodeAddress(key), sig: value})
-        num_signers += 1
         calc_msig_addr()
       } else {
+        liveState[key] = value
         global_states[key] = value
       }
     })
+    console.log("liveState:")
+    console.log(liveState)
+    console.log("userState:")
+    console.log(userState)
+    if (userState['accounts'].length < 1) {
+      userState['accounts'].push({addr: '', sig: ''})
+    }
+    userState = userState
+    liveState = liveState
   }
 
   async function reconnect() {
@@ -92,26 +222,6 @@
     tracking = false
   })
 
-  let txn_file
-  let txn
-  let txn_size = 1
-  let app_id = 542
-  let global_states = {}
-  let txn_sender
-  let txn_first_valid
-  let txn_last_valid
-
-  const MAX_SIGNERS = 8
-  let signers = []
-  let num_signers = 0
-  let threshold
-  let version = 1
-  let signed
-  let msig_address
-  let submit_enabled
-
-  $: threshold, calc_msig_addr()
-
   async function read_txn_file() {
     let file = this.files[0]
     txn_file = file.name
@@ -128,18 +238,15 @@
   }
 
   async function replace_txn() {
-    console.log(txn)
     const txn_bin = algosdk.encodeObj(txn)
-    console.log(txn_bin)
-    console.log($wallet_address)
     const box = {appIndex: app_id, name: new Uint8Array(Buffer.from('txn'))}
-    console.log(box)
+    const method = contract.methods.filter(m => m.name == "addTransaction")[0]
     const sp = await $algod.getTransactionParams().do()
     const update_txn_txn = algosdk.makeApplicationCallTxnFromObject({
       from: $wallet_address,
       appIndex: app_id,
       appArgs: [
-        new Uint8Array(Buffer.from('addTxn')),
+        method.getSelector(),
         txn_bin,
       ],
       boxes: [
@@ -150,36 +257,73 @@
     const b64_txn = Buffer.from(algosdk.encodeObj(update_txn_txn.get_obj_for_encoding())).toString('base64')
     const update_txn_stxn = await $handle.signTxn([{txn: b64_txn}]);
     //const update_txn_stxn = await $handle.signTxns([{txn: b64_txn}])
-    console.log(update_txn_stxn)
-    return
     const res = await $algod.sendRawTransaction(Buffer.from(update_txn_stxn[0].blob, 'base64')).do()
-    console.log(res)
   }
 
   async function fetch_app(apid) {
+    await reset_state()
     await getAppState(apid)
-    const boxes = await $algod.getApplicationBoxes(apid).do()
-    if (boxes['boxes'].length == 0) return
-    const box = await $algod.getApplicationBoxByName(apid, 'txn').do()
-    await getTxnBox(apid)
-    txn_sender = algosdk.encodeAddress(txn['from']['publicKey'])
-    txn_first_valid = txn['firstRound']
-    txn_last_valid = txn['lastRound']
+    await get_txn_boxes(apid)
+    console.log(liveState)
+    active_app = apid
+  }
+
+  async function create_new() {
+    const atc = new algosdk.AtomicTransactionComposer()
+    const contract = new algosdk.ABIContract(abi)
+    const signer = new algosdk.makeBasicAccountTransactionSigner($wallet_address)
+    const method = contract.methods.filter(m => m.name == "deploy")[0]
+    const version_major = 0
+    const version_minor = 1
+    const approval_prog = 'CCAGAQACBBAwJgMMVmVyc2lvbk1ham9yDFZlcnNpb25NaW5vcglUaHJlc2hvbGSABFIf8dA2GgASQAB2gAQcaqWPNhoAEkABX4AER2/KljYaABJAAauABPVl/dg2GgASQAETgAQoAjcDNhoAEkABIYAEKyMtkDYaABJAAKqABP5ItbQ2GgASQADUgAT2N6D4NhoAEkAAeoAEnIahhTYaABJAADOABGOuVTY2GgASQABEADEZIxJEMRgURCg2GgEXZyk2GgIXZyoiZ4AEFR98dTIIFlCwIkMxGYEFEkQxGEQxADIJEkSxIrIQMgmyBzIJsgmzIkMxGSUSRDEYRDEAMgkSRCg2GgEXZyk2GgIXZyJDMRkjEkQxGEQxADIJEkQqNhoBF2ciQzEZIxJEMRhEMQAyCRJENhoBiADfvEg2GgGIANc2GgIjWblENhoBiADKNhoCSSNZJEwkCFK/IkMxGSMSRDEYRDEAMgkSRDYaAYgAqLxIIkMxGSMSRDEYRDEAMgkSRDYaAhfAHDYaARdnIkMxGSMSRDEYRDEAMgkSRDYaARfAHGkiQzEZIxIxGSISEUQxGESIAKJENhoBI1k1ASM1ADEANAAWUQcINhoBJCQ0AAsIWTUCNhoBJDQCCFk1AzYaATQCJQhJNAMIUmY0ACIISTQBDED/yDEATIgAaSJDMRkjEjEZJBIRRDEYRIgASUQxACOIAFAiQ4oBAYADdHhui/8XjP+L/yEEDESL/4EJDUAAD4sAi/8hBQgWUQcIUEIAE4sAgAExi/+BChghBQgWUQcIUFCMAImKAAEjMggxAGVMSIwAiYoCAIv+i/8WUQcIaIv/IghJjP8hBAxA/+qJ'
+    const clear_prog = 'CA=='
+    const sp = await $algod.getTransactionParams().do()
+    atc.addMethodCall({
+      appID: 0,
+      method: method,
+      methodArgs: [
+        version_major,
+        version_minor
+      ],
+      approvalProgram: new Uint8Array(Buffer.from(approval_prog, 'base64')),
+      clearProgram: new Uint8Array(Buffer.from(clear_prog, 'base64')),
+      numGlobalByteSlices: 0,
+      numGlobalInts: 11,
+      numLocalByteSlices: 16,
+      numLocalInts: 0,
+      sender: $wallet_address,
+      suggestedParams: sp,
+    })
+    const txns_to_sign = atc.buildGroup()
+    /*
+    //const res2 = await atc.execute()
+    //console.log(res2)
+    return
+    const sign_txn_txn = algosdk.makeApplicationCreateTxnFromObject({
+      from: $wallet_address,
+      appArgs: [
+        algosdk.ABIMethod.fromSignature("deploy(uint8,uint8,uint8)void").getSelector(),
+        new Uint8Array(algosdk.encodeuint8),
+      ],
+      suggestedParams: sp,
+    })
+    */
+    const b64_txn = Buffer.from(algosdk.encodeObj(txns_to_sign[0]['txn'].get_obj_for_encoding())).toString('base64')
+    const update_txn_stxn = await $handle.signTxn([{txn: b64_txn}]);
+    //const update_txn_stxn = await $handle.signTxns([{txn: b64_txn}])
+    const { txId } = await $algod.sendRawTransaction(Buffer.from(update_txn_stxn[0].blob, 'base64')).do()
+    const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
+    console.log(res)
+    app_id = res['application-index']
+    fetch_app(app_id)
   }
 
   async function reset_state() {
     txn = undefined
-  }
-
-  async function add_address() {
-    if (num_signers < MAX_SIGNERS) {
-      signers.push({addr:'', sig:''})
-      num_signers += 1
-      calc_msig_addr()
-    }
-    if (num_signers == MAX_SIGNERS) {
-      this.disabled = true
-    }
+    active_app = undefined
+    msig_state_changed = false
+    txn_file = undefined
   }
 
   async function remove_all_signatures() {
@@ -196,9 +340,7 @@
     const b64_txn = Buffer.from(algosdk.encodeObj(sign_txn_txn.get_obj_for_encoding())).toString('base64')
     const update_txn_stxn = await $handle.signTxn([{txn: b64_txn}]);
     //const update_txn_stxn = await $handle.signTxns([{txn: b64_txn}])
-    console.log(update_txn_stxn)
     const res = await $algod.sendRawTransaction(Buffer.from(update_txn_stxn[0].blob, 'base64')).do()
-    console.log(res)
   }
 
   async function remove_signature() {
@@ -215,14 +357,11 @@
     const b64_txn = Buffer.from(algosdk.encodeObj(sign_txn_txn.get_obj_for_encoding())).toString('base64')
     const update_txn_stxn = await $handle.signTxn([{txn: b64_txn}]);
     //const update_txn_stxn = await $handle.signTxns([{txn: b64_txn}])
-    console.log(update_txn_stxn)
     const res = await $algod.sendRawTransaction(Buffer.from(update_txn_stxn[0].blob, 'base64')).do()
-    console.log(res)
   }
 
   async function add_signature() {
-    console.log(txn)
-    const txn_bin = Buffer.from(txn.toByte()).toString('base64')
+    const txn_bin = Buffer.from(txns[0].toByte()).toString('base64')
     const addrs = []
     signers.forEach((signer) => {
       if (algosdk.isValidAddress(signer['addr'])) {
@@ -241,14 +380,12 @@
     //const txn_sig = algosdk.encodeObj(txn_bin_sig[0].blob)
     /*
     const signature = signed_msig_txn['msig']['subsig'].forEach((sig) => {
-      console.log(sig)
       if (sig['s'] !== undefined) {
         return sig['s']
       }
     })
     */
     const signature = signed_msig_txn['msig']['subsig'].filter(sig => sig.s !== undefined)[0]['s']
-    console.log($wallet_address)
     const sp = await $algod.getTransactionParams().do()
     const sign_txn_txn = algosdk.makeApplicationCallTxnFromObject({
       from: $wallet_address,
@@ -263,9 +400,7 @@
     const b64_txn = Buffer.from(algosdk.encodeObj(sign_txn_txn.get_obj_for_encoding())).toString('base64')
     const update_txn_stxn = await $handle.signTxn([{txn: b64_txn}]);
     //const update_txn_stxn = await $handle.signTxns([{txn: b64_txn}])
-    console.log(update_txn_stxn)
     const res = await $algod.sendRawTransaction(Buffer.from(update_txn_stxn[0].blob, 'base64')).do()
-    console.log(res)
   }
 
   async function submit_transaction() {
@@ -282,10 +417,8 @@
     if (signed_txns.length > 1) {
       const merged_txns = algosdk.mergeMultisigTransactions(signed_txns)
       const res = await $algod.sendRawTransaction(merged_txns).do()
-      console.log(res)
     } else {
       const res = await $algod.sendRawTransaction(signed_txns[0]).do()
-      console.log(res)
     }
   }
 
@@ -315,6 +448,7 @@
   }
 
   async function update_address(index, address) {
+    msig_state_changed = true
     // Check to see if address has signature
     if (global_states[address]) {
       signers[index]['sig'] = global_states[address]
@@ -332,34 +466,44 @@
     document.getElementById('txn-select').click()
   }
 
-  async function remove_address(index) {
-    document.getElementById('add-address').disabled = false
-    signers.splice(index, 1)
-    num_signers -= 1
-    if (threshold > num_signers) {
-      threshold = signers.length
+  async function add_address() {
+    msig_state_changed = true
+    if (userState['accounts'].length < MAX_SIGNERS) {
+      userState['accounts'].push({addr:'', sig:''})
+      userState = userState
+      calc_msig_addr()
     }
-    if (num_signers < 1) {
-      signers.push({addr:'', sig:''})
-      num_signers = 1
-      threshold = 1
+  }
+
+  async function remove_address(index) {
+    msig_state_changed = true
+    document.getElementById('add-address').disabled = false
+    userState['accounts'].splice(index, 1)
+    if (userState['Threshold'] > userState['accounts'].length) {
+      userState['Threshold'] = signers.length
+    }
+    if (userState['accounts'].length < 1) {
+      userState['accounts'].push({addr:'', sig:''})
+      userState['Threshold'] = 1
       msig_address = undefined
     } else {
       calc_msig_addr()
     }
+    userState = userState
+    console.log(userState)
   }
 
   async function move_addr_up(index, e) {
     e.target.blur()
     if (index <= 0) return
-    [signers[index-1], signers[index]] = [signers[index], signers[index-1]]
+    [userState['accounts'][index-1], userState['accounts'][index]] = [userState['accounts'][index], userState['accounts'][index-1]]
     calc_msig_addr()
   }
 
   async function move_addr_down(index, e) {
     e.target.blur()
-    if (index >= signers.length - 1) return
-    [signers[index], signers[index+1]] = [signers[index+1], signers[index]]
+    if (index >= userState['accounts'].length - 1) return
+    [userState['accounts'][index], userState['accounts'][index+1]] = [userState['accounts'][index+1], userState['accounts'][index]]
     calc_msig_addr()
   }
 </script>
@@ -382,20 +526,24 @@
         <label for="app-id">On-Chain Msig AppID:</label>
         <input id="app-id" type="number" min="1" step="1" bind:value={app_id} />
         <button on:click={() => fetch_app(app_id)}>Retrieve</button>
-        {#if txn}
+        {#if app_id && active_app}
         <button on:click={reset_state}>Clear</button>
         {:else}
         <div>or</div>
-        <button on:click={reset_state}>Create New</button>
+        <a href="#submitting-txn" tabindex="-1"><button on:click={create_new}>Create New</button></a>
         {/if}
       </div>
     </fieldset>
-    {#if txn}
+    {#if active_app}
     <fieldset>
       <legend>Transactions</legend>
       <div class="field-row">
+      {#if txns}
       <ul class="tree-view has-container" style="width: 100%">
+      <!--
       {#each Array(txn_size) as _, group_index}
+      -->
+      {#each txns as txn, group_index}
         <li>
           <details open={!group_index}>
           <summary>{txn_size > 1 ? 'Gtxn' : 'Txn'}{group_index}</summary>
@@ -404,6 +552,7 @@
         </li>
       {/each}
       </ul>
+      {/if}
       </div>
       <div class="field-row" style="justify-content: flex-end">
         <label for="txn-select">Replace Txn: {txn_file ? txn_file : '...'}</label>
@@ -416,38 +565,30 @@
       <legend>Multisignature</legend>
       <div class="field-row" style="justify-content: space-between">
       <div class="field-row" style="display: inline-flex">
-        <label for="msig-version">Version</label>
+        <label for="msig-version">Version:</label>
         <select id="msig-version" bind:value={version} disabled>
           <option value={1}>1</option>
         </select>
-        <label for="msig-threshold">Threshold</label>
-        <select id="msig-threshold" bind:value={threshold}>
-          {#each Array(num_signers) as _, i (i)}
+        <label for="msig-threshold">Threshold:</label>
+        <select id="msig-threshold" bind:value={userState['Threshold']}>
+          {#each Array(signers.length) as _, i (i)}
           <option value={i+1}>{i+1}</option>
           {/each}
         </select>
-        <button id="add-address" on:click={add_address}>Add Address</button>
+        <button id="add-address" on:click={add_address} disabled={signers.length >= MAX_SIGNERS}>Add Address</button>
+      </div>
+      <div class="field-row" style="margin-top: 0">
+        <button type="submit" disabled={!msig_state_changed}>Update Application</button>
       </div>
       </div>
-      <!--
+      {#each userState['accounts'] as signer, index}
       <div class="field-row">
-        <label>1</label>
-        <input type="range" min="1" max="8" bind:value={num_signers} />
-        <label>8</label>
-      </div>
-      <div class="field-row">
-      </div>
-      {#each Array(num_signers) as _, i (i)}
-      {#each Object.entries(signers) as [addr, sig], index (index)}
-      -->
-      {#each Array(num_signers) as _, index (index)}
-      <div class="field-row">
-      <input id={signers[index]['addr']} type="checkbox" checked={Buffer.from(signers[index]['sig'], 'base64').length == 64} disabled />
-      <label for={signers[index]['addr']}>Signed</label>
-      <input type="text" maxlength="58" bind:value={signers[index]['addr']} on:input={(e) => update_address(index, e.target.value)} style="width: 100%">
-      <button on:click={() => remove_address(index)}>Remove</button>
+      <input id={index} type="checkbox" checked={Buffer.from(signer['sig'], 'base64').length == 64} disabled />
+      <label for={index}>Signed</label>
+      <input type="text" maxlength="58" bind:value={signer['addr']} on:input={(e) => update_address(index, e.target.value)} style="width: 100%">
+      <button on:click={() => remove_address(index)} disabled={userState['accounts'].length <= 0}>{userState['accounts'].length > 1 ? 'Remove' : 'Clear'}</button>
       <button on:click={(e) => move_addr_up(index, e)} style="min-width:14px; width: 14px; padding: 0" disabled={index <= 0}>U</button>
-      <button on:click={(e) => move_addr_down(index, e)} style="min-width:14px; width: 14px; padding: 0" disabled={index >= num_signers - 1}>D</button>
+      <button on:click={(e) => move_addr_down(index, e)} style="min-width:14px; width: 14px; padding: 0" disabled={index >= userState['accounts'].length - 1}>D</button>
       </div>
       {/each}
       <div class="field-row">
@@ -456,10 +597,16 @@
     </fieldset>
     <fieldset>
       <legend>Controls</legend>
-      <div class="field-row" style="display: inline-flex; margin-top: 0">
+      <div class="field-row">
+        <p>Signing Account: {$wallet_address}</p>
+      </div>
+      <div class="field-row" style="justify-content: space-between">
+      <div class="field-row" style="margin-top: 0">
+        <button on:click={remove_all_signatures}>Remove All Signatures</button>
+      </div>
+      <div class="field-row" style="margin-top: 0">
         <button on:click={add_signature}>Add Signature</button>
         <button on:click={remove_signature}>Remove Signature</button>
-        <button on:click={remove_all_signatures}>Remove All Signatures</button>
       </div>
     </fieldset>
     <section class="field-row" style="justify-content: flex-end">
@@ -468,7 +615,6 @@
         <label for="auto-submit">Auto-Submit</label>
       </div>
       <a href="#submitting-txn" tabindex="-1"><button type="submit" on:click={submit_transaction} disabled={submit_enabled}>Submit Transaction</button></a>
-      <button type="submit">Update Application</button>
     </section>
     {/if}
   </div>
@@ -522,13 +668,13 @@
         <input id="algod-port" type="number" min="1" max="65535" step="1" style="width: 450px" bind:value={$port} />
       </div>
       <div class="field-row" style="justify-content: flex-end">
-        <label>{tracking ? 'Tracking' : 'Stopped'}</label>
+        <label>{tracking ? 'Connected ✅' : 'Disconnected ❌'}</label>
         <button on:click={reconnect}>Reconnect</button>
       </div>
     </fieldset>
   </div>
   <footer style="text-align: right">
-    <button on:click={update_settings}>Save</button>
+    <button on:click={update_algod_settings}>Save</button>
     <button onclick="history.back()">Close</button>
   </footer>
 </div>
