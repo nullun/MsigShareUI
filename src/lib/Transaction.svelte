@@ -4,17 +4,8 @@
   export let txn
   const pretty_txn = {}
 
-  async function prettyTxn(tx) {
-    console.log(tx)
-    return
-    const pretty = {}
-    switch (tx) {
-      default:
-        pretty[tx['key']] = tx['value']
-    }
-  }
-
   onMount(() => {
+    console.log(txn)
     Object.entries(txn).forEach((field) => {
       switch (field[0]) {
         case 'type':
