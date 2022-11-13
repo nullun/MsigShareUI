@@ -1,9 +1,10 @@
 <script>
   import { onMount } from 'svelte'
   import algosdk from 'algosdk'
-  export let txn
+  export let txn = {}
   const pretty_txn = {}
 
+  /*
   onMount(() => {
     console.log(txn)
     Object.entries(txn).forEach((field) => {
@@ -57,6 +58,7 @@
     })
     console.log(pretty_txn)
   })
+  */
 </script>
 
 <ul>
