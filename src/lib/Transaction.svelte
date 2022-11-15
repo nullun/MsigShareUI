@@ -4,10 +4,8 @@
   export let txn = {}
   const pretty_txn = {}
 
-  /*
   onMount(() => {
-    console.log(txn)
-    Object.entries(txn).forEach((field) => {
+    Object.entries(txn['txn']).forEach((field) => {
       switch (field[0]) {
         case 'type':
           pretty_txn['Type'] = field[1]
@@ -42,6 +40,10 @@
         case 'genesisID':
           pretty_txn['Genesis'] = field[1]
           break
+        case 'grp':
+        case 'group':
+          pretty_txn['Group'] = Buffer.from(field[1]).toString('base64')
+          break
         case 'fv':
         case 'firstRound':
           pretty_txn['First Valid'] = field[1]
@@ -56,9 +58,7 @@
         default:
       }
     })
-    console.log(pretty_txn)
   })
-  */
 </script>
 
 <ul>

@@ -1,10 +1,18 @@
 import { readable, writable } from 'svelte/store'
 
 export const num_accounts = writable(1)
-export const user_state = writable({})
+export const user_state = writable({
+  txns: [],
+  accounts: [],
+  sigs: {}
+})
+export const global_state = writable({
+  txns: [],
+  accounts: [],
+  sigs: {}
+})
 export const app = writable(undefined)
 export const app_id = writable(undefined)
-export const global_state = writable({})
 export const txns = writable({})
 export const accounts = writable([])
 export const msig_address = writable(undefined)

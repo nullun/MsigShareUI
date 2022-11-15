@@ -24,10 +24,8 @@
     if (!$app_id) return
     try {
       const app = await $algod.getApplicationByID($app_id).do()
-      console.log(app)
       $creator = app['params']['creator']
       const app_acct = await $algod.accountInformation(app_addr).do()
-      console.log(app_acct)
       app_addr_bal = app_acct['amount']
       $accounts = []
       app['params']['global-state'].forEach((gs) => {
@@ -36,21 +34,37 @@
         if (k.length === 32 && algosdk.isValidAddress(algosdk.encodeAddress(k))) {
           $global_state[algosdk.encodeAddress(k)] = v['uint']
         } else if (k.length === 1) {
-          console.log(k)
           //$global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
           $accounts[algosdk.decodeUint64(k)] = algosdk.encodeAddress(new Uint8Array(Buffer.from(v['bytes'], 'base64')))
         } else {
           $global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
         }
       })
-      $user_state['threshold'] = $global_state['Threshold']
+      //$user_state['threshold'] = $global_state['Threshold']
+      for (let idx = 0; idx < $accounts.length; idx++) {
+        const acc_ls = await $algod.accountInformation($accounts[idx]).do()
+        const ls = acc_ls['apps-local-state'].forEach((als) => {
+          if (als.id === $app_id) {
+            $global_state['sigs'][$accounts[idx]] = als['key-value'].map(kv => kv.value.bytes)
+          }
+        })
+      }
       $num_accounts = $accounts.length
-      $user_state['accounts'] = [...$accounts]
+      $global_state['accounts'] = [...$accounts]
       const boxes = await $algod.getApplicationBoxes($app_id).do()
-      console.log(boxes)
+      if (boxes['boxes'].length > 0) {
+        boxes['boxes'].forEach(async (bx) => {
+          const box_name = Buffer.from(bx.name).toString()
+          const box = await $algod.getApplicationBoxByName($app_id, box_name).do()
+          const pos = parseInt(box_name.substring(3))
+          $global_state['txns'][pos] = algosdk.decodeObj(box.value.subarray(2))
+        })
+      }
     } catch(e) {
+      console.log(e)
       console.log(e.message)
     }
+    $user_state = Object.assign({}, $global_state)
     $app = true
   }
 
@@ -60,7 +74,6 @@
     apid = undefined
     app_addr = undefined
     app_addr_bal = 0
-    $global_state = {}
     $accounts = []
     $creator = undefined
   }

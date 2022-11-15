@@ -14,6 +14,7 @@
     "vite": "^3.2.0"
   },
   "dependencies": {
+    "@msgpack/msgpack": "github:jasonpaulos/msgpack-javascript#bigint-support",
     "@randlabs/myalgo-connect": "^1.4.1",
     "algosdk": "^1.23.1"
   }
