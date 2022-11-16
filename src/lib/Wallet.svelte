@@ -57,7 +57,7 @@
   <select bind:value={wallet_provider} on:change={select_wallet}>
     <option>Connect Wallet</option>
     <option>AlgoSigner</option>
-    <option>MyAlgo</option>
+    <option disabled>MyAlgo</option>
   </select>
 {/if}
 </div>

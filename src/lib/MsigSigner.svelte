@@ -51,6 +51,7 @@
   async function retrieve_app() {
     if (!$app_id) return
     try {
+      clear_app()
       calc_app_address()
       const app = await $algod.getApplicationByID($app_id).do()
       $creator = app['params']['creator']
@@ -76,6 +77,8 @@
       for (let idx = 0; idx < $accounts.length; idx++) {
         const acc_ls = await $algod.accountInformation($accounts[idx]).do()
         for (let als = 0; als < acc_ls['apps-local-state'].length; als++) {
+          console.log(acc_ls['apps-local-state'][als])
+          if (!acc_ls['apps-local-state'][als]['key-value']) continue
           if (acc_ls['apps-local-state'][als].id === $app_id) {
             $global_state['sigs'][$accounts[idx]] = acc_ls['apps-local-state'][als]['key-value'].map(kv => kv.value.bytes)
           }
@@ -95,7 +98,8 @@
           const box_name = Buffer.from(boxes['boxes'][b].name).toString()
           const box = await $algod.getApplicationBoxByName($app_id, box_name).do()
           const pos = parseInt(box_name.substring(3))
-          $global_state['txns'][pos] = algosdk.decodeObj(box.value.subarray(2))
+          console.log(algosdk.decodeObj(box.value))
+          $global_state['txns'][pos] = {txn: algosdk.decodeObj(box.value)}
         }
       }
     } catch(e) {
@@ -148,6 +152,34 @@
     retrieve_app($app_id)
   }
 
+  async function destroy_app() {
+    console.log("destroying")
+    const atc = new algosdk.AtomicTransactionComposer()
+    const method = contract.methods.filter(m => m.name === "destroy")[0]
+
+    const sp = await $algod.getTransactionParams().do()
+    sp.flatFee = true
+    sp.fee = algosdk.ALGORAND_MIN_TX_FEE * 2
+    atc.addMethodCall({
+      appID: $app_id,
+      sender: $wallet_address,
+      onComplete: algosdk.OnApplicationComplete.DeleteApplicationOC,
+      method: method,
+      methodArgs: [],
+      suggestedParams: sp
+    })
+
+    const txn = Buffer.from(algosdk.encodeObj(atc.transactions[0]['txn'].get_obj_for_encoding())).toString('base64')
+    const stxn = await $handle.signTxn([{txn: txn}])
+    location = '#submitting-txn'
+    const { txId } = await $algod.sendRawTransaction(Buffer.from(stxn[0].blob, 'base64')).do()
+    const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    console.log(res)
+    history.back()
+    $app_id = undefined
+    clear_app()
+  }
+
   async function fund_app() {
     const sp = await $algod.getTransactionParams().do()
     const fund_txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -158,9 +190,12 @@
     })
     const txn = Buffer.from(algosdk.encodeObj(fund_txn.get_obj_for_encoding())).toString('base64')
     const stxn = await $handle.signTxn([{txn: txn}])
+    location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(Buffer.from(stxn[0].blob, 'base64')).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
     console.log(res)
+    retrieve_app($app_id)
   }
 
   /*
@@ -326,9 +361,12 @@
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
     console.log(binSignedTxns)
+    location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
     console.log(res)
+    retrieve_app($app_id)
   }
 
   /*
@@ -473,10 +511,17 @@
         return t.s
       }).filter(t => t !== undefined)
     })
-    const output = [sigs[0][0], sigs[1][0], sigs[2][0]]
+
+    const output = []
+    for (let s = 0; s < sigs.length; s++) {
+      output.push(sigs[s][0])
+    }
+    //const output = [sigs[0][0], sigs[1][0], sigs[2][0]]
 
     // Submit Signatures
-    const optin_or_noop = true ? algosdk.OnApplicationComplete.OptInOC : algosdk.OnApplicationComplete.NoOpOC
+    const acc = await $algod.accountInformation($wallet_address).do()
+    const acc_opted_in = acc['apps-local-state'].filter(apls => apls.id === $app_id).length > 0 ? true : false
+    const optin_or_noop = acc_opted_in ? algosdk.OnApplicationComplete.NoOpOC : algosdk.OnApplicationComplete.OptInOC
     const method = contract.methods.filter(m => m.name === "setSignatures")[0]
     atc.addMethodCall({
       appID: $app_id,
@@ -495,9 +540,130 @@
     })
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
+    location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     console.log(res)
+    history.back()
+    retrieve_app($app_id)
+  }
+
+  async function clear_sigs() {
+    const atc = new algosdk.AtomicTransactionComposer()
+    const sp = await $algod.getTransactionParams().do()
+
+    const method = contract.methods.filter(m => m.name === "clearSignatures")[0]
+    atc.addMethodCall({
+      appID: $app_id,
+      sender: $wallet_address,
+      method: method,
+      methodArgs: [],
+      suggestedParams: sp
+    })
+    atc.buildGroup()
+    const user_txns = []
+    atc.transactions.forEach((txn) => {
+      user_txns.push({txn: Buffer.from(algosdk.encodeObj(txn['txn'].get_obj_for_encoding())).toString('base64')})
+    })
+    const stxn = await $handle.signTxn(user_txns)
+    const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
+    location = '#submitting-txn'
+    const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
+    const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    console.log(res)
+    history.back()
+    retrieve_app($app_id)
+  }
+
+  async function clear_all_sigs() {
+    console.log("TODO")
+    return
+    /*
+    const atc = new algosdk.AtomicTransactionComposer()
+    const sp = await $algod.getTransactionParams().do()
+
+    const method = contract.methods.filter(m => m.name === "clearSignatures")[0]
+    atc.addMethodCall({
+      appID: $app_id,
+      sender: $wallet_address,
+      method: method,
+      methodArgs: [],
+      suggestedParams: sp
+    })
+    atc.buildGroup()
+    const user_txns = []
+    atc.transactions.forEach((txn) => {
+      user_txns.push({txn: Buffer.from(algosdk.encodeObj(txn['txn'].get_obj_for_encoding())).toString('base64')})
+    })
+    const stxn = await $handle.signTxn(user_txns)
+    const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
+    location = '#submitting-txn'
+    const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
+    const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    console.log(res)
+    history.back()
+    retrieve_app($app_id)
+    */
+  }
+
+  async function submit_transaction() {
+    const atc = new algosdk.AtomicTransactionComposer()
+    const sp = await $algod.getTransactionParams().do()
+
+    // If not all signatures exist, don't proceed
+    for (let acc in $accounts) {
+      if (!$global_state['sigs'][$accounts[acc]] || $global_state['sigs'][$accounts[acc]].length < $global_state['txns'].length) {
+        console.log("Missing signatures from " + $accounts[acc])
+        //return
+      }
+    }
+
+    // Sign Transactions
+    const msparams = {
+      version: version,
+      threshold: $global_state['Threshold'],
+      addrs: $accounts
+    }
+
+    let msig_txns = []
+    for (let t = 0; t < $global_state['txns'].length; t++) {
+      const single_txn = algosdk.decodeUnsignedTransaction(algosdk.encodeObj($global_state['txns'][t]['txn']))
+      const txn = algosdk.createMultisigTransaction(single_txn, msparams)
+      msig_txns.push(txn)
+    }
+
+    // Combine and merge all signatures
+    let merged_signed_txns = []
+    // For every txn in the group
+    for (let m = 0; m < msig_txns.length; m++) {
+
+      const signed_txns = []
+      // For every account who has signed
+      for (let acc in $global_state['sigs']) {
+        signed_txns.push(algosdk.appendSignRawMultisigSignature(msig_txns[m], msparams, acc, Buffer.from($global_state['sigs'][acc][m], 'base64')).blob)
+      }
+
+      if (!signed_txns) {
+        console.log("No signatures for txn" + m)
+        return
+      }
+
+      if (signed_txns.length > 1) {
+        merged_signed_txns.push(algosdk.mergeMultisigTransactions(signed_txns))
+      } else {
+        merged_signed_txns.push(signed_txns[0])
+      }
+    }
+
+    // Submit Signed Transactions
+    location = '#submitting-txn'
+    const { txId } = await $algod.sendRawTransaction(merged_signed_txns).do()
+    const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
+    console.log(res)
+    retrieve_app($app_id)
+
+    return
   }
 
   onMount(async () => {
@@ -535,6 +701,9 @@
         <button on:click={clear_app}>Clear</button>
         <div>or</div>
         <button on:click={deploy_app}>Create New</button>
+        {#if $app && $wallet_address === $creator}
+        <button on:click={destroy_app}>Destroy</button>
+        {/if}
       </div>
       {#if $app && $wallet_address === $creator}
       <div class="field-row">
@@ -656,7 +825,10 @@
       </div>
       <div class="field-row" style="">
         <button on:click={sign_all} disabled={$global_state['txns'].length < 1}>Sign All</button>
-        <button>Clear Signatures</button>
+        <button on:click={clear_sigs}>Clear Signatures</button>
+        {#if $wallet_address == $creator}
+        <button on:click={clear_all_sigs}>Clear All Signatures</button>
+        {/if}
       </div>
       {#if $global_state['txns'].length < 1}
       <div class="field-row">
@@ -670,7 +842,7 @@
         <input id="auto-submit" type="checkbox" />
         <label for="auto-submit">Auto-Submit</label>
       </div>
-      <a href="#submitting-txn" tabindex="-1"><button type="submit">Submit Transaction</button></a>
+      <a href="#submitting-txn" tabindex="-1"><button on:click={submit_transaction}>Submit Transaction</button></a>
     </div>
     {/if}
     {/if}
@@ -679,7 +851,7 @@
   <div class="status-bar">
     <p class="status-bar-field">First Valid: {Math.max(...$user_state['txns'].map(t => t['txn']['fv']))} {current_round < Math.max(...$user_state['txns'].map(t => t['txn']['fv'])) ? '🕗' : current_round < Math.min(...$user_state['txns'].map(t => t['txn']['lv'])) ? '✅' : '❌'}</p>
     <p class="status-bar-field">Last Valid: {Math.min(...$user_state['txns'].map(t => t['txn']['lv']))} {current_round < Math.max(...$user_state['txns'].map(t => t['txn']['fv'])) ? '🕗' : current_round < Math.min(...$user_state['txns'].map(t => t['txn']['lv'])) ? '✅' : '❌'}</p>
-    <p class="status-bar-field">Signed: {Object.entries($global_state['sigs']).length}/{$accounts.length}</p>
+    <p class="status-bar-field">Signed: {Object.entries($global_state['sigs']).length}/{$global_state['Threshold']}</p>
     <p class="status-bar-field" style="justify-content: flex-end">{tracking ? 'Current Round: '+current_round : 'Stopped'}</p>
   </div>
 </div>
