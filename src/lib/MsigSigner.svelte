@@ -48,66 +48,93 @@
     $user_state = Object.assign({}, $global_state)
   }
 
+  async function get_app_state() {
+    const app = await $algod.getApplicationByID($app_id).do()
+    $creator = app['params']['creator']
+    const app_acct = await $algod.accountInformation(msig_app_addr).do()
+    app_addr_bal = app_acct['amount']
+
+    // Global state (inc. accounts)
+    for (let gs = 0; gs < app['params']['global-state'].length; gs++) {
+      const k = Buffer.from(app['params']['global-state'][gs]['key'], 'base64')
+      const v = app['params']['global-state'][gs]['value']
+      if (k.length === 32 && algosdk.isValidAddress(algosdk.encodeAddress(k))) {
+        $global_state[algosdk.encodeAddress(k)] = v['uint']
+      } else if (k.length === 1) {
+        //$global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
+        $accounts[algosdk.decodeUint64(k)] = algosdk.encodeAddress(new Uint8Array(Buffer.from(v['bytes'], 'base64')))
+      } else {
+        $global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
+      }
+    }
+
+    // Populate sigs with accounts
+    for (let idx = 0; idx < $accounts.length; idx++) {
+      const acc_ls = await $algod.accountInformation($accounts[idx]).do()
+      for (let als = 0; als < acc_ls['apps-local-state'].length; als++) {
+        console.log(acc_ls['apps-local-state'][als])
+        if (!acc_ls['apps-local-state'][als]['key-value']) continue
+        if (acc_ls['apps-local-state'][als].id === $app_id) {
+          $global_state['sigs'][$accounts[idx]] = acc_ls['apps-local-state'][als]['key-value'].map(kv => kv.value.bytes)
+        }
+      }
+    }
+    if ($accounts.length) {
+      $num_accounts = $accounts.length
+    } else {
+      $num_accounts = 1
+    }
+    $global_state['accounts'] = [...$accounts]
+  }
+
+  async function get_txn_from_boxes() {
+    const boxes = await $algod.getApplicationBoxes($app_id).do()
+    if (boxes['boxes'].length > 0) {
+      for (let b = 0; b < boxes['boxes'].length; b++) {
+        const box_name = Buffer.from(boxes['boxes'][b].name).toString()
+        const box = await $algod.getApplicationBoxByName($app_id, box_name).do()
+        const pos = parseInt(box_name.substring(3))
+        console.log(algosdk.decodeObj(box.value))
+        $global_state['txns'][pos] = {txn: algosdk.decodeObj(box.value)}
+      }
+    }
+  }
+
   async function retrieve_app() {
     if (!$app_id) return
     try {
       clear_app()
       calc_app_address()
-      const app = await $algod.getApplicationByID($app_id).do()
-      $creator = app['params']['creator']
-      const app_acct = await $algod.accountInformation(msig_app_addr).do()
-      app_addr_bal = app_acct['amount']
+
       $accounts = []
 
-      // Global state (inc. accounts)
-      for (let gs = 0; gs < app['params']['global-state'].length; gs++) {
-        const k = Buffer.from(app['params']['global-state'][gs]['key'], 'base64')
-        const v = app['params']['global-state'][gs]['value']
-        if (k.length === 32 && algosdk.isValidAddress(algosdk.encodeAddress(k))) {
-          $global_state[algosdk.encodeAddress(k)] = v['uint']
-        } else if (k.length === 1) {
-          //$global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
-          $accounts[algosdk.decodeUint64(k)] = algosdk.encodeAddress(new Uint8Array(Buffer.from(v['bytes'], 'base64')))
-        } else {
-          $global_state[k] = v['type'] === 1 ? v['bytes'] : v['uint']
-        }
-      }
-
-      // Populate sigs with accounts
-      for (let idx = 0; idx < $accounts.length; idx++) {
-        const acc_ls = await $algod.accountInformation($accounts[idx]).do()
-        for (let als = 0; als < acc_ls['apps-local-state'].length; als++) {
-          console.log(acc_ls['apps-local-state'][als])
-          if (!acc_ls['apps-local-state'][als]['key-value']) continue
-          if (acc_ls['apps-local-state'][als].id === $app_id) {
-            $global_state['sigs'][$accounts[idx]] = acc_ls['apps-local-state'][als]['key-value'].map(kv => kv.value.bytes)
-          }
-        }
-      }
-      if ($accounts.length) {
-        $num_accounts = $accounts.length
-      } else {
-        $num_accounts = 1
-      }
-      $global_state['accounts'] = [...$accounts]
+      // Get application state
+      await get_app_state()
 
       // Transactions (from Boxes)
-      const boxes = await $algod.getApplicationBoxes($app_id).do()
-      if (boxes['boxes'].length > 0) {
-        for (let b = 0; b < boxes['boxes'].length; b++) {
-          const box_name = Buffer.from(boxes['boxes'][b].name).toString()
-          const box = await $algod.getApplicationBoxByName($app_id, box_name).do()
-          const pos = parseInt(box_name.substring(3))
-          console.log(algosdk.decodeObj(box.value))
-          $global_state['txns'][pos] = {txn: algosdk.decodeObj(box.value)}
-        }
-      }
+      await get_txn_from_boxes()
     } catch(e) {
       console.log(e)
     }
     $user_state = Object.assign({}, $global_state)
     calc_msig_address()
     $app = true
+  }
+
+  async function check_for_app_changes(rnd, apid) {
+    const block = await $algod.block(rnd).do()
+    if (block['block']['txns'] === undefined) return
+    for (let t = 0; t < block['block']['txns'].length; t++) {
+      if (block['block']['txns'][t]['txn']['type'] !== "appl") return
+      if (block['block']['txns'][t]['txn']['apid'] !== apid) return
+
+      // Check for state changes
+      await get_app_state()
+
+      await get_txn_from_boxes()
+    }
+    $user_state = Object.assign({}, $global_state)
+    calc_msig_address()
   }
 
   async function deploy_app() {
@@ -195,7 +222,7 @@
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
     console.log(res)
-    retrieve_app($app_id)
+    //retrieve_app($app_id)
   }
 
   /*
@@ -207,6 +234,7 @@
     try {
       const status = await $algod.statusAfterBlock(current_round).do()
       current_round = status['last-round']
+      check_for_app_changes(current_round, $app_id)
       track_round()
     } catch {
       tracking = false
@@ -352,21 +380,21 @@
       return
     }
     atc.buildGroup()
-    console.log(atc.transactions)
+    //console.log(atc.transactions)
     const user_txns = []
     atc.transactions.forEach((txn) => {
       user_txns.push({txn: Buffer.from(algosdk.encodeObj(txn['txn'].get_obj_for_encoding())).toString('base64')})
     })
-    console.log(user_txns)
+    //console.log(user_txns)
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
-    console.log(binSignedTxns)
+    //console.log(binSignedTxns)
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
-    console.log(res)
-    retrieve_app($app_id)
+    //console.log(res)
+    //retrieve_app($app_id)
   }
 
   /*
@@ -545,7 +573,7 @@
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     console.log(res)
     history.back()
-    retrieve_app($app_id)
+    //retrieve_app($app_id)
   }
 
   async function clear_sigs() {
@@ -572,7 +600,7 @@
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     console.log(res)
     history.back()
-    retrieve_app($app_id)
+    //retrieve_app($app_id)
   }
 
   async function clear_all_sigs() {
@@ -602,7 +630,7 @@
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     console.log(res)
     history.back()
-    retrieve_app($app_id)
+    //retrieve_app($app_id)
     */
   }
 
@@ -661,7 +689,7 @@
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
     console.log(res)
-    retrieve_app($app_id)
+    //retrieve_app($app_id)
 
     return
   }
