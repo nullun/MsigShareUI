@@ -72,7 +72,7 @@
     for (let idx = 0; idx < $accounts.length; idx++) {
       const acc_ls = await $algod.accountInformation($accounts[idx]).do()
       for (let als = 0; als < acc_ls['apps-local-state'].length; als++) {
-        console.log(acc_ls['apps-local-state'][als])
+        //console.log(acc_ls['apps-local-state'][als])
         if (!acc_ls['apps-local-state'][als]['key-value']) continue
         if (acc_ls['apps-local-state'][als].id === $app_id) {
           $global_state['sigs'][$accounts[idx]] = acc_ls['apps-local-state'][als]['key-value'].map(kv => kv.value.bytes)
@@ -94,7 +94,7 @@
         const box_name = Buffer.from(boxes['boxes'][b].name).toString()
         const box = await $algod.getApplicationBoxByName($app_id, box_name).do()
         const pos = parseInt(box_name.substring(3))
-        console.log(algosdk.decodeObj(box.value))
+        //console.log(algosdk.decodeObj(box.value))
         $global_state['txns'][pos] = {txn: algosdk.decodeObj(box.value)}
       }
     }
@@ -173,7 +173,7 @@
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(Buffer.from(stxn[0].blob, 'base64')).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
     history.back()
     $app_id = res['application-index']
     retrieve_app($app_id)
@@ -201,7 +201,7 @@
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(Buffer.from(stxn[0].blob, 'base64')).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
     history.back()
     $app_id = undefined
     clear_app()
@@ -221,8 +221,8 @@
     const { txId } = await $algod.sendRawTransaction(Buffer.from(stxn[0].blob, 'base64')).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
-    console.log(res)
-    //retrieve_app($app_id)
+    //console.log(res)
+    retrieve_app($app_id)
   }
 
   /*
@@ -457,17 +457,17 @@
       })
     }
     atc.buildGroup()
-    console.log(atc.transactions)
+    //console.log(atc.transactions)
     const user_txns = []
     atc.transactions.forEach((txn) => {
       user_txns.push({txn: Buffer.from(algosdk.encodeObj(txn['txn'].get_obj_for_encoding())).toString('base64')})
     })
-    console.log(user_txns)
+    //console.log(user_txns)
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
   }
 
   async function clear_txns() {
@@ -492,21 +492,21 @@
       })
     }
     atc.buildGroup()
-    console.log(atc.transactions)
+    //console.log(atc.transactions)
     const user_txns = []
     atc.transactions.forEach((txn) => {
       user_txns.push({txn: Buffer.from(algosdk.encodeObj(txn['txn'].get_obj_for_encoding())).toString('base64')})
     })
-    console.log(user_txns)
+    //console.log(user_txns)
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
   }
 
   async function collapse_all_txns() {
-    console.log(document.getElementById('txn-view').children)
+    //console.log(document.getElementById('txn-view').children)
   }
 
   async function expand_all_txns() {
@@ -571,7 +571,7 @@
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
     history.back()
     //retrieve_app($app_id)
   }
@@ -598,7 +598,7 @@
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
     history.back()
     //retrieve_app($app_id)
   }
@@ -628,7 +628,7 @@
     location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
-    console.log(res)
+    //console.log(res)
     history.back()
     //retrieve_app($app_id)
     */
@@ -688,7 +688,7 @@
     const { txId } = await $algod.sendRawTransaction(merged_signed_txns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
-    console.log(res)
+    //console.log(res)
     //retrieve_app($app_id)
 
     return
