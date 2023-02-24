@@ -441,7 +441,7 @@
 
     for (let group_index = 0; group_index < $user_state['txns'].length; group_index++) {
       const box = {appIndex: $app_id, name: new Uint8Array(Buffer.from('txn'+group_index))}
-      const transaction = algosdk.encodeObj($user_state['txns'][group_index])
+      const transaction = algosdk.encodeObj($user_state['txns'][group_index]['txn'])
       atc.addMethodCall({
         appID: $app_id,
         sender: $wallet_address,
