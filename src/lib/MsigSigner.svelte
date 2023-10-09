@@ -469,6 +469,7 @@
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
+    retrieve_app($app_id)
     //console.log(res)
   }
 
@@ -506,6 +507,7 @@
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
     history.back()
+    retrieve_app($app_id)
     //console.log(res)
   }
 
