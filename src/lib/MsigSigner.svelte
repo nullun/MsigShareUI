@@ -465,8 +465,10 @@
     //console.log(user_txns)
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
+    location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
     //console.log(res)
   }
 
@@ -500,8 +502,10 @@
     //console.log(user_txns)
     const stxn = await $handle.signTxn(user_txns)
     const binSignedTxns = stxn.map((tx) => AlgoSigner.encoding.base64ToMsgpack(tx.blob));
+    location = '#submitting-txn'
     const { txId } = await $algod.sendRawTransaction(binSignedTxns).do()
     const res = await algosdk.waitForConfirmation($algod, txId, 6)
+    history.back()
     //console.log(res)
   }
 
@@ -735,11 +739,11 @@
       </div>
       {#if $app && $wallet_address === $creator}
       <div class="field-row">
-        <label>Application Address:</label>
-        <span>{msig_app_addr}</span>
+        <label for="msig-app-addr">Application Address:</label>
+        <span id="msig-app-addr">{msig_app_addr}</span>
       </div>
       <div class="field-row">
-        <label>MsigApp Balance:</label><span>{app_addr_bal / (10 ** 6)} Algo</span>
+        <label for="app-addr-bal">MsigApp Balance:</label><span id="app-addr-bal">{app_addr_bal / (10 ** 6)} Algo</span>
         <button on:click={fund_app}>Fund 2 Algo</button>
       </div>
       {/if}
